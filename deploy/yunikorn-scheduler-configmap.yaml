@@ -1,0 +1,63 @@
+# YuniKorn Scheduler Configuration
+# This ConfigMap updates the existing YuniKorn scheduler configuration
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yunikorn-scheduler-config
+  namespace: yunikorn
+data:
+  logback.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <configuration>
+      <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+          <pattern>%d{ISO8601} %-5level [%thread] %logger{36} - %msg%n</pattern>
+        </encoder>
+      </appender>
+
+      <logger name="org.apache.yunikorn" level="INFO"/>
+      <logger name="org.apache.hadoop.yarn" level="INFO"/>
+
+      <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+      </root>
+    </configuration>
+
+---
+# YuniKorn Service Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yunikorn-service-config
+  namespace: yunikorn
+data:
+  yunikorn.properties: |
+    # YuniKorn Service Properties
+    yunikorn.scheduler.address=0.0.0.0:9080
+    yunikorn.scheduler.hostname=yunikorn-service
+    yunikorn.k8s.enabled=true
+    yunikorn.core.embedded=true
+
+    # Log level
+    log.level=INFO
+
+    # Cluster ID
+    yunikorn.cluster.id=kubernetes-cluster
+
+    # Policy Group
+    yunikorn.policy.group=queues.yaml,placement-rules.yaml
+
+    # Enable RM callback for Kubernetes
+    yunikorn.rm.callback.enabled=true
+
+    # Event tracking
+    yunikorn.event.tracking.enabled=true
+
+    # Application tracking
+    yunikorn.application.history.enabled=true
+    yunikorn.application.history.max-applications=1000
+
+    # Health check
+    yunikorn.health.check.enabled=true
+    yunikorn.health.check.interval=30s

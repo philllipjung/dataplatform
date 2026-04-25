@@ -1,75 +1,53 @@
 {
   "config_specs": [
     {
-      "provision_id": "0001_wfbm",
-      "enabled": "true",
-      "resource_calculation": {
-        "minio": "1234/5678/<<service_id>>",
-        "threshold": 10000000,
-        "min_queue": "min",
-        "max_queue": "max"
-      },
-      "gang_scheduling": {
-        "cpu": "1",
-        "memory": "5",
-        "executor": "1"
-      },
-      "build_number": {
-        "number": "13"
-      }
-    },
-    {
       "provision_id": "0002_wfbm",
-      "enabled": "true",
       "resource_calculation": {
-        "minio": "1234/5678/<<service_id>>/input/",
-        "threshold": 10000000,
-        "min_queue": "min",
-        "max_queue": "max"
-      },
-      "gang_scheduling": {
-        "cpu": "5",
-        "memory": "10",
-        "executor": "1"
-      },
-      "build_number": {
-        "number": "11"
-      }
-    },
-    {
-      "provision_id": "0003_wfbm",
-      "enabled": "true",
-      "resource_calculation": {
+        "enabled": "true",
         "minio": "1234/5678/<<service_id>>",
-        "threshold": 10000000,
-        "min_queue": "min",
-        "max_queue": "max"
+        "tiers": [
+          {
+            "name": "small",
+            "max_size": 10000000,
+            "queue": "ias.small",
+            "executor": 1,
+            "cpu": 1
+          },
+          {
+            "name": "medium",
+            "min_size": 10000000,
+            "queue": "ias.medium",
+            "executor": 2,
+            "cpu": 2
+          },
+          {
+            "name": "large",
+            "min_size": 53687091200,
+            "queue": "ias.large",
+            "executor": 3,
+            "cpu": 4
+          }
+        ]
       },
-      "gang_scheduling": {
-        "cpu": "1",
-        "memory": "1",
-        "executor": "2"
+      "resource_allocation": {
+        "enabled": true,
+        "name": "ias allocation",
+        "source": {
+          "cpu": 80,
+          "memory": 80,
+          "queue": "root.ias"
+        },
+        "target": {
+          "cpu": 5,
+          "memory": 5,
+          "queue": "temp"
+        },
+        "namespace": "common"
       },
       "build_number": {
-        "number": "0"
-      }
-    },
-    {
-      "provision_id": "0004_wfbm",
-      "enabled": "true",
-      "resource_calculation": {
-        "minio": "1234/5678/<<service_id>>",
-        "threshold": 10000000,
-        "min_queue": "min",
-        "max_queue": "max"
-      },
-      "gang_scheduling": {
-        "cpu": "32",
-        "memory": "64",
-        "executor": "10"
-      },
-      "build_number": {
-        "number": "0"
+        "major": "4",
+        "minor": "0",
+        "patch": "1"
       }
     }
   ]

@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yunikorn-configs
+  namespace: yunikorn
+data:
+  queues.yaml: |
+    queues:
+      - name: root
+        queues:
+          - name: default
+            submit-policy: flexible
+            resources:
+              guaranteed:
+                memory: 100000
+                vcore: 100
+            maxapplications: 100
+            applications:
+              - name: sap-1
+                queue: root.default
+                partitions:
+                  - name: default
+                    queues:
+                      - name: root.default
+            maxrunningapps:
+              user-limit: 100
+              default: 100
+
+          - name: ias
+            submit-policy: flexible
+            resources:
+              guaranteed:
+                memory: 100000
+                vcore: 100
+            maxapplications: 100
+            queues:
+              - name: small
+                submit-policy: flexible
+                resources:
+                  guaranteed:
+                    memory: 30000
+                    vcore: 30
+                maxapplications: 50
+
+              - name: medium
+                submit-policy: flexible
+                resources:
+                  guaranteed:
+                    memory: 50000
+                    vcore: 50
+                maxapplications: 50
+
+              - name: large
+                submit-policy: flexible
+                resources:
+                  guaranteed:
+                    memory: 100000
+                    vcore: 100
+                maxapplications: 50
+
+          # temp 큐: common 네임스페이스에서 직접 사용
+          # 하위 큐 생성 방지
+          - name: temp
+            submit-policy: restricted
+            resources:
+              guaranteed:
+                memory: 100000
+                vcore: 100
+            maxapplications: 100
+            # 하위 큐 생성 비활성화
+            applications: []
+
+  placement-rules.yaml: |
+    placement-rules:
+      # common 네임스페이스 규칙: root.temp에 직접 할당
+      - name: common-namespace-rule
+        parent: root.temp
+        create: false  # 하위 큐 생성 비활성화
+        filter:
+          type: namespace
+          values: common
+
+      # default 네임스페이스 규칙: root.default 사용
+      - name: default-namespace-rule
+        parent: root.default
+        create: false
+        filter:
+          type: namespace
+          values: default
+
+      # ias 네임스페이스 규칙: root.ias 하위 큐 자동 선택
+      - name: ias-namespace-rule
+        parent: root.ias
+        create: false
+        filter:
+          type: namespace
+          values: ias
+
+      # 기본 규칙: 사용자 이름으로 큐 생성
+      - name: user-rule
+        parent: root
+        create: true
+        filter:
+          type: user
+          values: "*"

@@ -5,6 +5,7 @@ metadata:
   namespace: default
   labels:
     yunikorn.apache.org/app-id: "SERVICE_ID_PLACEHOLDER"
+    yunikorn.apache.org/queue: "QUEUE_PLACEHOLDER"
     build-number: "BUILD_NUMBER"
     spark-app: "true"
 spec:
@@ -14,10 +15,10 @@ spec:
   imagePullPolicy: IfNotPresent
   mainClass: org.apache.spark.examples.SparkPi
   mainApplicationFile: local:///opt/spark/examples/jars/spark-examples.jar
-  sparkVersion: 4.0.1
+  sparkVersion: BUILD_NUMBER
   driver:
     cores: 1
-    memory: 512m
+    memory: 2048m
     podName: "SERVICE_ID_PLACEHOLDER"
     labels:
       yunikorn.apache.org/app-id: "SERVICE_ID_PLACEHOLDER"
@@ -37,7 +38,7 @@ spec:
             "minMember": 1,
             "minResource": {
               "cpu": "100m",
-              "memory": "512Mi"
+              "memory": "2048Mi"
             },
             "nodeSelector": {},
             "tolerations": []
@@ -46,8 +47,8 @@ spec:
             "name": "spark-executor",
             "minMember": 1,
             "minResource": {
-              "cpu": "100m",
-              "memory": "512Mi"
+              "cpu": "EXECUTOR_CPU_MIN_RESOURCE",
+              "memory": "2048Mi"
             },
             "nodeSelector": {},
             "tolerations": []
@@ -61,10 +62,10 @@ spec:
             image: docker.io/library/spark:BUILD_NUMBER
             resources:
               limits:
-                memory: 512m
+                memory: 2048m
                 cpu: "1"
               requests:
-                memory: 512m
+                memory: 2048m
                 cpu: "500m"
     securityContext:
       capabilities:
@@ -78,8 +79,8 @@ spec:
         type: RuntimeDefault
   executor:
     instances: 2
-    cores: 1
-    memory: 512m
+    cores: EXECUTOR_CPU_PLACEHOLDER
+    memory: 2048m
     labels:
       yunikorn.apache.org/app-id: "SERVICE_ID_PLACEHOLDER"
       build-number: "BUILD_NUMBER"
@@ -87,10 +88,8 @@ spec:
     annotations:
       # Executor가 속한 그룹 이름 지정
       yunikorn.apache.org/task-group-name: "spark-executor"
-      # Prometheus scraping annotations for executor
-      prometheus.io/scrape: "true"
-      prometheus.io/port: "4040"
-      prometheus.io/path: "/metrics/executors/prometheus/"
+      # Note: Spark 4.0.1 does NOT expose metrics on executor pods
+      # All executor metrics are available on the driver pod at /metrics/executors/prometheus/
     template:
       spec:
         containers:
@@ -98,11 +97,11 @@ spec:
             image: docker.io/library/spark:BUILD_NUMBER
             resources:
               limits:
-                memory: 512m
-                cpu: "1"
+                memory: 2048m
+                cpu: "EXECUTOR_CPU_LIMIT"
               requests:
-                memory: 512m
-                cpu: "500m"
+                memory: 2048m
+                cpu: "EXECUTOR_CPU_REQUEST"
     securityContext:
       capabilities:
         drop:
@@ -129,7 +128,7 @@ spec:
     spark.kubernetes.driver.deleteOnTermination: "false"
     # Prometheus metrics configuration
     spark.kubernetes.driver.annotation.prometheus.io/scrape: "true"
-    spark.kubernetes.driver.annotation.prometheus.io/path: "/metrics/driver/prometheus/"
+    spark.kubernetes.driver.annotation.prometheus.io/path: "/metrics/executors/prometheus/"
     spark.kubernetes.driver.annotation.prometheus.io/port: "4040"
     spark.kubernetes.driver.service.annotation.prometheus.io/scrape: "true"
     spark.kubernetes.driver.service.annotation.prometheus.io/path: "/metrics/driver/prometheus/"
@@ -142,9 +141,7 @@ spec:
   # SparkApplication 객체 종료 후 2시간(7200초) 동안 유지
   # 참고: v1beta2 API에서는 파드 보존(cleanPodPolicy) 필드가 없음
   timeToLiveSeconds: 7200
-  # Large number for longer runtime (1M iterations)
-  arguments:
-    - "1000000"
+  # Moderate iterations for testing (1M iterations)
 
   batchScheduler: yunikorn
   batchSchedulerOptions:

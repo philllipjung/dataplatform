@@ -53,13 +53,95 @@ func ApplyServiceIDLabelsWithUIDToYAML(yamlStr string, serviceID string, categor
 
 // ApplyBuildNumberToYAML - YAML 문자열에 빌드 번호 적용
 // 템플릿 파일의 BUILD_NUMBER를 실제 빌드 번호로 교체
-// buildNumber는 minor 버전이며, 전체 버전은 major.minor.patch 형식으로 생성
-// major=4 (상수), patch=1 (상수)
-// 예: buildNumber="10" → "4.10.1"
-func ApplyBuildNumberToYAML(yamlStr string, buildNumber string) string {
-	// 전체 버전 생성: 4.{minor}.1
-	fullVersion := fmt.Sprintf("4.%s.1", buildNumber)
+// buildNumber의 major, minor, patch를 사용하여 전체 버전 생성
+// 예: major="4", minor="10", patch="1" → "4.10.1"
+func ApplyBuildNumberToYAML(yamlStr string, buildNumber BuildNumber) string {
+	// 전체 버전 생성: {major}.{minor}.{patch}
+	fullVersion := fmt.Sprintf("%s.%s.%s", buildNumber.Major, buildNumber.Minor, buildNumber.Patch)
 	return strings.ReplaceAll(yamlStr, "BUILD_NUMBER", fullVersion)
+}
+
+// ApplyArgumentsToYAML - YAML의 arguments 섹션을 사용자 제공 arguments로 교체
+// arguments는 공백으로 구분된 문자열 (예: "111 222 333")
+// arguments가 비어있거나 비어있는 문자열("")이면 template의 기본 arguments 유지
+// template에 arguments 섹션이 없으면 새로 생성
+func ApplyArgumentsToYAML(yamlStr string, arguments string) string {
+	// arguments가 비어있으면 template의 기본값 유지
+	if arguments == "" {
+		return yamlStr
+	}
+
+	// 공백으로 구분하여 arguments 배열 생성
+	argArray := strings.Fields(arguments)
+	if len(argArray) == 0 {
+		return yamlStr
+	}
+
+	// YAML에 arguments 섹션이 있는지 확인
+	hasArgumentsSection := strings.Contains(yamlStr, "arguments:")
+
+	if !hasArgumentsSection {
+		// arguments 섹션이 없으면 새로 생성
+		// "spec:" 라인 찾아서 그 다음에 삽입
+		lines := strings.Split(yamlStr, "\n")
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "spec:") {
+				// spec: 다음 줄에 arguments 추가
+				// 들여쓰기 계산 (spec: 다음 속성들은 2칸 더 들여쓰기)
+				baseIndent := strings.Repeat(" ", len(line)-len(strings.TrimLeft(line, " ")))
+				indent := baseIndent + "  "  // spec:의 자식 속성들은 2칸 더 들여쓰기
+
+				// arguments 라인들을 생성
+				argsLines := []string{fmt.Sprintf("%sarguments:", indent)}
+				for _, arg := range argArray {
+					argsLines = append(argsLines, fmt.Sprintf("%s  - \"%s\"", indent, arg))
+				}
+
+				// lines에 삽입
+				newLines := make([]string, 0, len(lines)+len(argsLines))
+				newLines = append(newLines, lines[:i+1]...)
+				newLines = append(newLines, argsLines...)
+				newLines = append(newLines, lines[i+1:]...)
+
+				return strings.Join(newLines, "\n")
+			}
+		}
+	}
+
+	// arguments 섹션이 있으면 교체
+	lines := strings.Split(yamlStr, "\n")
+	resultLines := make([]string, 0)
+	skipOldArgs := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		// arguments: 섹션 찾기
+		if strings.HasPrefix(trimmed, "arguments:") {
+			resultLines = append(resultLines, line)
+			indentLevel := len(line) - len(strings.TrimLeft(line, " "))
+			// 사용자 arguments 추가
+			indent := strings.Repeat(" ", indentLevel+2)
+			for _, arg := range argArray {
+				resultLines = append(resultLines, fmt.Sprintf("%s- \"%s\"", indent, arg))
+			}
+			skipOldArgs = true
+			continue
+		}
+
+		// 기존 arguments 건너뛰기
+		if skipOldArgs {
+			if trimmed != "" && !strings.HasPrefix(trimmed, "-") {
+				skipOldArgs = false
+			}
+			continue
+		}
+
+		resultLines = append(resultLines, line)
+	}
+
+	return strings.Join(resultLines, "\n")
 }
 
 // UpdateExecutorMinMember - task-groups annotation의 executor minMember 업데이트
@@ -145,7 +227,7 @@ func ApplySparkFileCountToYAML(yamlStr string, count int) string {
 				// spark.file.count 삽입
 				newLines := make([]string, len(lines)+1)
 				copy(newLines, lines[:i])
-				newLines[i] = fmt.Sprintf("%sspark.file.count: %d", indent, count)
+				newLines[i] = fmt.Sprintf("%sspark.file.count: \"%d\"", indent, count)
 				newLines = append(newLines, lines[i:]...)
 				return strings.Join(newLines, "\n")
 			}
@@ -166,7 +248,7 @@ func ApplySparkFileCountToYAML(yamlStr string, count int) string {
 				indent := strings.Repeat(" ", 8) // sparkConf 들여쓰기
 				newLines := make([]string, len(lines)+1)
 				copy(newLines, lines[:i+1])
-				newLines[i+1] = fmt.Sprintf("%sspark.file.count: %d", indent, count)
+				newLines[i+1] = fmt.Sprintf("%sspark.file.count: \"%d\"", indent, count)
 				newLines = append(newLines, lines[i+1:]...)
 				return strings.Join(newLines, "\n")
 			}
@@ -175,4 +257,53 @@ func ApplySparkFileCountToYAML(yamlStr string, count int) string {
 
 	return yamlStr
 }
+func UpdateNamespaceInYAML(yamlStr string, namespace string) string {
+	lines := strings.Split(yamlStr, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "namespace:") {
+			indent := strings.Repeat(" ", len(line)-len(strings.TrimLeft(line, " ")))
+			lines[i] = fmt.Sprintf("%snamespace: %s", indent, namespace)
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
+}
 
+// UpdateQueueInYAML - YAML의 metadata.labels queue 업데이트
+func UpdateQueueInYAML(yamlStr string, queue string) string {
+	lines := strings.Split(yamlStr, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "yunikorn.apache.org/queue:") {
+			indent := strings.Repeat(" ", len(line)-len(strings.TrimLeft(line, " ")))
+			// YuniKorn queue label requires full path with root. prefix
+			fullQueue := fmt.Sprintf("root.%s", queue)
+			lines[i] = fmt.Sprintf("%syunikorn.apache.org/queue: \"%s\"", indent, fullQueue)
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// ApplyExecutorCPUToYAML - YAML의 executor CPU 관련 필드 업데이트
+// 4개의 플레이스홀더를 CPU 값에 따라 치환:
+// 1. EXECUTOR_CPU_PLACEHOLDER: spec.executor.cores
+// 2. EXECUTOR_CPU_MIN_RESOURCE: task-groups executor minResource.cpu
+// 3. EXECUTOR_CPU_LIMIT: executor resources.limits.cpu
+// 4. EXECUTOR_CPU_REQUEST: executor resources.requests.cpu
+func ApplyExecutorCPUToYAML(yamlStr string, cpu int) string {
+	// CPU 값 관련 플레이스홀더 계산
+	executorCPUCores := fmt.Sprintf("%d", cpu)
+	executorCPUMinResource := fmt.Sprintf("%dm", cpu*100)
+	executorCPULimit := fmt.Sprintf("%d", cpu)
+	executorCPURequest := fmt.Sprintf("%dm", cpu*500)
+
+	// 플레이스홀더 치환
+	yamlStr = strings.ReplaceAll(yamlStr, "EXECUTOR_CPU_PLACEHOLDER", executorCPUCores)
+	yamlStr = strings.ReplaceAll(yamlStr, "EXECUTOR_CPU_MIN_RESOURCE", executorCPUMinResource)
+	yamlStr = strings.ReplaceAll(yamlStr, "EXECUTOR_CPU_LIMIT", executorCPULimit)
+	yamlStr = strings.ReplaceAll(yamlStr, "EXECUTOR_CPU_REQUEST", executorCPURequest)
+
+	return yamlStr
+}
