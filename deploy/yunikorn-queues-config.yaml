@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yunikorn-queues-config
+  namespace: default
+data:
+  queues.yaml: |
+    partitions:
+      - name: default
+        queues:
+          - name: root
+            queues:
+              - name: default
+                properties:
+                  schedulingPolicy: fair
+
+              - name: opensearch
+                properties:
+                  schedulingPolicy: fifo
+
+              - name: ias
+                properties:
+                  schedulingPolicy: fair
+                submitacl: '*'
+                adminacl: '*'
+                queues:
+                  - name: small
+                    resources:
+                      max:
+                        vcore: "2000"
+                        memory: "10G"
+                    guarenteed: 0
+                    maxapplications: 10
+                    maxrunningapps: 5
+
+                  - name: medium
+                    resources:
+                      max:
+                        vcore: "4000"
+                        memory: "20G"
+                    guarenteed: 0
+                    maxapplications: 20
+                    maxrunningapps: 10
+
+                  - name: large
+                    resources:
+                      max:
+                        vcore: "8000"
+                        memory: "40G"
+                    guarenteed: 0
+                    maxapplications: 5
+                    maxrunningapps: 3
+
+              # temp 큐: common 네임스페이스에서 직접 사용
+              # 하위 큐 생성 방지 (restricted)
+              - name: temp
+                properties:
+                  schedulingPolicy: fair
+                submitacl: '*'
+                adminacl: '*'
+                resources:
+                  max:
+                    vcore: "10000"
+                    memory: "100G"
+                maxapplications: 100
+                maxrunningapps: 50
+
+  placement-rules.yaml: |
+    placement-rules:
+      # common 네임스페이스 규칙: root.temp에 직접 할당
+      - name: common-namespace-rule
+        parent: root.temp
+        create: false  # 하위 큐 생성 비활성화
+        filter:
+          type: namespace
+          values: common
+
+      # default 네임스페이스 규칙: root.default 사용
+      - name: default-namespace-rule
+        parent: root.default
+        create: false
+        filter:
+          type: namespace
+          values: default
+
+      # ias 네임스페이스 규칙: root.ias 하위 큐 자동 선택
+      - name: ias-namespace-rule
+        parent: root.ias
+        create: false
+        filter:
+          type: namespace
+          values: ias
+
+      # 기본 규칙 (fallback)
+      - name: default-rule
+        parent: root.default
+        create: false

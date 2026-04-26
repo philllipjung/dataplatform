@@ -96,4 +96,31 @@ var (
 		},
 		[]string{"provision_id", "resource_type"},
 	)
+
+	// ResourceAllocationDecision - Resource Allocation 결정 수
+	ResourceAllocationDecision = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "spark_service_resource_allocation_decision_total",
+			Help: "Total number of resource allocation decisions (allocated/skipped/disabled/error)",
+		},
+		[]string{"provision_id", "decision"},
+	)
+
+	// ResourceAllocationSourceUsage - Source 리소스 사용량
+	ResourceAllocationSourceUsage = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "spark_service_resource_allocation_source_usage_percent",
+			Help: "Source resource usage percentage for resource allocation",
+		},
+		[]string{"provision_id", "resource_type"},
+	)
+
+	// ResourceAllocationTargetUsage - Target 리소스 사용량
+	ResourceAllocationTargetUsage = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "spark_service_resource_allocation_target_usage_percent",
+			Help: "Target resource usage percentage for resource allocation",
+		},
+		[]string{"provision_id", "resource_type"},
+	)
 )

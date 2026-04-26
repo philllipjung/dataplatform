@@ -1,827 +1,585 @@
-# Hynix Spark Operator Service
+# Hynix
 
-Spark Operator에서 사용되는 SparkApplication CR을 생성하는 Go 마이크로서비스입니다.
+Spark Application Orchestrator for Kubernetes with intelligent resource allocation and gang scheduling capabilities.
 
-## 🎯 핵심 기능
+## Overview
 
-### 1. MinIO 기반 리소스 계산
-- **파일 크기 기반 큐 선택**: MinIO 메타데이터를 활용한 Yunikorn 큐 자동 선택
-  - 파일 < threshold → `min_queue` 사용
-  - 파일 ≥ threshold → `max_queue` 사용
-- **StatObject 사용**: 파일 다운로드 없이 메타데이터만 조회
-- **동적 경로 구성**: `{minio_base_path}/{service_id}`
-- **폴더인 경우 spark.file.count 추가**: 폴더(여러 오브젝트)인 경우 오브젝트 수를 YAML에 추가
-- **SERVICE_ID_PLACEHOLDER 치환**: `<<service_id>>` 플레이스홀더를 실제 서비스 ID로 치환
+Hynix is a microservice that automates the creation and management of Spark applications on Kubernetes. It provides dynamic resource allocation based on data size, integrates with YuniKorn for gang scheduling, and supports multi-tier resource management.
 
-### 2. 템플릿 처리
-- **BUILD_NUMBER 치환**: config.json의 build_number.number를 템플릿에 적용
-- **Executor 설정**: gang_scheduling.executor를 instances와 minMember에 적용
-- **서비스 ID 라벨**: SERVICE_ID_PLACEHOLDER를 실제 서비스 ID로 치환
-- **UID 파라미터 지원**: Create/Reference 엔드포인트에서 `uid` 파라미터로 카테고리 구분
+## Features
 
-### 3. 구조화된 JSON 로깅
-- 5가지 JSON 로그 형식으로 완전한 추적 가능
-- OpenTelemetry Collector와 통합
+- **Dynamic Spark Application Creation**: Automatically creates Kubernetes SparkApplication CRDs based on configurable templates
+- **Intelligent Resource Allocation**: Automatically calculates and assigns resources based on:
+  - MinIO file/folder sizes
+  - YuniKorn queue utilization
+  - Resource quotas and thresholds
+- **Gang Scheduling**: Ensures all required resources are allocated before starting Spark applications via YuniKorn
+- **Multi-Tier Resource Management**: Supports different resource tiers (small, medium, large) with automatic selection
+- **RESTful API**: Simple HTTP API for Spark application management
+- **Prometheus Metrics**: Built-in metrics collection and monitoring
+- **Build Number Management**: Semantic versioning support for Spark applications
 
-### 4. 동적 프로비저닝 관리
-- **enabled 필드**: 프로비저닝별 활성화/비활성화 제어
-  - `enabled: "true"`: 리소스 계산 및 갱스케줄러 설정 적용
-  - `enabled: "false"`: 템플릿 원본 유지, BUILD_NUMBER만 적용
+## Architecture
 
-## 📡 엔드포인트
-
-### 1. Reference (GET) - YAML 조회 및 미리보기
-SparkApplication CR을 조회하고 리소스 계산을 수행하여 YAML로 반환합니다. **Kubernetes에는 제출하지 않습니다.**
-
-**URL:** `GET /api/v1/spark/reference`
-
-**Query Parameters:**
-| 파라미터 | 타입 | 필수 여부 | 설명 |
-|---------|------|----------|--------|
-| `provision_id` | string | ✅ 필수 | 프로비저닝 ID (예: `0001_wfbm`, `0002_wfbm`) |
-| `service_id` | string | ✅ 필수 | 서비스 ID (예: `test-00001`, `test-00020`) |
-| `category` | string | ✅ 필수 | 카테고리 (예: `test`, `tttm`, `fsa`, `cpa`) |
-| `uid` | string | ✅ 필수 | 고유 ID (예: `123`) |
-
-**Response:**
-- **Content-Type**: `application/x-yaml`
-- **Body**: 전체 SparkApplication YAML
-
-#### 요청 예시 1: enabled=true (UID 포함)
-```bash
-curl "http://localhost:8080/api/v1/spark/reference?provision_id=0002_wfbm&service_id=test-00020&category=fsa&uid=123"
+```
+hynix/
+├── main.go                 # Main entry point (port 8080)
+├── handlers/              # HTTP request handlers
+│   ├── create.go         # Spark application creation endpoint
+│   ├── reference.go      # Template reference endpoint
+│   ├── types.go          # Request/response types
+│   └── health.go         # Health check endpoint
+├── services/             # Business logic layer
+│   ├── config.go         # Configuration management
+│   ├── template.go       # Template processing
+│   ├── kubernetes.go     # Kubernetes/YuniKorn integration
+│   └── utils.go          # Utility functions
+├── metrics/              # Prometheus metrics
+├── template/             # Spark application templates
+├── config/               # Configuration files
+├── logger/               # Logging infrastructure
+└── middleware/           # HTTP middleware
 ```
 
-**서버 로그:**
-```json
-{
-  "level": "info",
-  "msg": "생성된 YAML (활성화 모드)",
-  "endpoint": "reference",
-  "provision_id": "0002_wfbm",
-  "service_id": "test-00020",
-  "content": "apiVersion: sparkoperator.k8s.io/v1beta2\nkind: SparkApplication\nmetadata:\n  name: test-00020-fsa-123\n..."
-}
+## API Endpoints
+
+### Health Check
+```
+GET /health
 ```
 
-#### 요청 예시 2: enabled=false (UID 없음)
-```bash
-curl "http://localhost:8080/api/v1/spark/reference?provision_id=0001_wfbm&service_id=test-00001&category=test"
+### Prometheus Metrics
+```
+GET /metrics
 ```
 
-**응답 예시 (service_id-label만 적용됨):**
-```yaml
-apiVersion: sparkoperator.k8s.io/v1beta2
-kind: SparkApplication
-metadata:
-  name: test-00001-test
-  namespace: default
-  labels:
-    yunikorn.apache.org/app-id: "test-00001-test"
-    build-number: "4.0.1"
-    spark-app: "true"
-spec:
-  # ... (테플릿만 적용됨)
+### Create Spark Application
 ```
+POST /api/v1/spark/create
+Content-Type: application/json
 
-**처리 로직 흐름도:**
-```
-1. Request 수신 (parseReferenceRequest)
-2. 필수 파라미터 검증 (validateReferenceRequest)
-3. 템플릿 로드 (services.LoadTemplateRaw)
-4. config.json 로드 (services.LoadConfig)
-5. 프로비저닝 설정 찾기 (services.FindProvisionConfig)
-6. enabled 확인:
-   - false: handleReferenceDisabled() → 템플릿만 적용, 서비스 ID 라벨 적용
-   - true: handleReferenceEnabled() → 리소스 계산, 갱스케줄러 설정 적용
-```
-
-### 2. Create (POST) - Kubernetes 제출
-SparkApplication CR을 Kubernetes 클러스터에 생성합니다. 실제 파드 제출은 처리되지 않습니다.
-
-**URL:** `POST /api/v1/spark/create`
-
-**요청 헤더:**
-```bash
--H "Content-Type: application/json"
-```
-
-**요청 본문 예시:**
-
-#### enabled=true (활성화 모드)
-```json
 {
   "provision_id": "0002_wfbm",
-  "service_id": "test-00020",
-  "category": "fsa",
+  "service_id": "1234-wfbm",
+  "category": "tttm",
   "region": "ic",
-  "uid": "123"
+  "uid": "optional-uid",
+  "arguments": "1000000"  // Optional: Spark application arguments
 }
 ```
 
-**Response (성공):**
+**Arguments Field**:
+- Optional field for passing arguments to the Spark application
+- Space-separated values (e.g., `"111 222 333"`)
+- If provided, adds `arguments:` section under `spec:` in the YAML
+- Example: `"arguments": "1000000"` → `spec.arguments: - "1000000"`
+
+### Get Application Template
+```
+GET /api/v1/spark/reference?provision_id=0002_wfbm
+```
+
+## API Response Codes
+
+### Response Structure
+
+All API responses follow a standard structure:
+
+**Success Response** (2xx):
 ```json
 {
-  "category": "fsa",
+  "success": true,
   "message": "SparkApplication CR 생성 성공",
-  "provision_id": "0002_wfbm",
-  "region": "ic",
-  "result": {
-    "name": "test-00020-fsa-123",
-    "namespace": "default"
-  },
-  "service_id": "test-00020"
+  "data": {
+    "provision_id": "0002_wfbm",
+    "service_id": "1234-wfbm",
+    "category": "tttm",
+    "region": "ic",
+    "result": {
+      "name": "app-name",
+      "namespace": "default"
+    }
+  }
 }
 ```
 
-**결과 예시:**
-- **SparkApplication 이름**: `test-00020-fsa-123`
-  - `service_id`: `test-00020`
-  - `category`: `fsa` (YAML에 적용됨)
-  - `uid`: `123`
-  - 생성된 큐: `max` (파일 크기 ≥ threshold)
-  - executor 인스턴스: 1명 (config.json 설정)
-
-#### enabled=false (비활성화 모드)
+**Error Response** (4xx/5xx):
 ```json
 {
-  "provision_id": "0001_wfbm",
-  "service_id": "test-00001",
-  "category": "test",
-  "region": "default"
+  "success": false,
+  "message": "프로비저닝 설정을 찾을 수 없습니다",
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "지정된 프로비저닝 ID가 존재하지 않습니다",
+    "details": "999_invalid",
+    "retryable": false
+  }
 }
 ```
 
-**응답 예시:**
-```json
-{
-  "message": "SparkApplication CR 생성 성공",
-  "provision_id": "0001_wfbm",
-  "result": {
-    "name": "test-00001-test",
-    "namespace": "default"
-  },
-  "service_id": "test-00001"
-}
-```
+### HTTP Status Codes
 
-**curl 명령어:**
+| Code | Type | Retryable | Description |
+|------|------|-----------|-------------|
+| **200** | Success | No | SparkApplication template YAML returned (reference endpoint) |
+| **201** | Success | No | SparkApplication CR created successfully (create endpoint) |
+| **400** | Business Error | **No** | Bad Request or Validation Failed |
+| **404** | Business Error | **No** | Resource not found (provision ID, template) |
+| **500** | Technical Error | **Yes** | Internal Server Error (config load, Kubernetes API, etc.) |
+
+### Error Codes
+
+**Business Errors (4xx) - Do Not Retry**:
+- `BAD_REQUEST`: Invalid JSON format or request structure
+- `VALIDATION_FAILED`: Missing required fields (provision_id, service_id, category, region)
+- `NOT_FOUND`: Provision ID or template not found
+- `UNPROCESSABLE`: Request cannot be processed as-is
+
+**Technical Errors (5xx) - Safe to Retry**:
+- `CONFIG_LOAD_FAILED`: Failed to load config.json
+- `TEMPLATE_LOAD_FAILED`: Failed to load template YAML
+- `KUBERNETES_ERROR`: Kubernetes API request failed
+- `INTERNAL_ERROR`: Unexpected server error
+- `SERVICE_UNAVAILABLE`: Service temporarily unavailable
+- `YUNIKORN_ERROR`: YuniKorn API request failed
+- `MINIO_ERROR`: MinIO connection error
+
+### Examples
+
+**1. Success Response**:
 ```bash
 curl -X POST http://localhost:8080/api/v1/spark/create \
   -H "Content-Type: application/json" \
   -d '{
     "provision_id": "0002_wfbm",
-    "service_id": "test-00020",
-    "category": "fsa",
+    "service_id": "test-app",
+    "category": "batch",
     "region": "ic",
-    "uid": "123"
+    "uid": "001"
   }'
 ```
 
-**참고**: `enabled=false`인 경우 `category` 파라미터는 **사용되지 않습니다**. 템플릿 원본의 SERVICE_ID_PLACEHOLDER만 치환되며, 리소스 계산은 수행되지 않습니다.
+**Response** (201):
+```json
+{
+  "success": true,
+  "message": "SparkApplication CR 생성 성공",
+  "data": {
+    "result": {
+      "name": "test-app-batch-001",
+      "namespace": "default"
+    }
+  }
+}
+```
 
-## ⚙️ Configuration
+**2. Validation Error** (400 - No Retry):
+```bash
+curl -X POST http://localhost:8080/api/v1/spark/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provision_id": "0002_wfbm",
+    "service_id": "test",
+    "category": "",
+    "region": "ic",
+    "uid": "001"
+  }'
+```
 
-### config.json Structure
+**Response** (400):
+```json
+{
+  "success": false,
+  "message": "요청 검증에 실패했습니다",
+  "error": {
+    "code": "VALIDATION_FAILED",
+    "message": "필수 파라미터가 누락되었습니다",
+    "details": "provision_id, service_id, category, region 필드가 모두 필요합니다",
+    "retryable": false
+  }
+}
+```
+
+**3. Not Found Error** (404 - No Retry):
+```bash
+curl -X POST http://localhost:8080/api/v1/spark/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provision_id": "999_invalid",
+    "service_id": "test",
+    "category": "test",
+    "region": "ic",
+    "uid": "001"
+  }'
+```
+
+**Response** (404):
+```json
+{
+  "success": false,
+  "message": "프로비저닝 설정을 찾을 수 없습니다",
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "지정된 프로비저닝 ID가 존재하지 않습니다",
+    "details": "999_invalid",
+    "retryable": false
+  }
+}
+```
+
+**4. Technical Error** (500 - Retry Safe):
+```bash
+curl -X POST http://localhost:8080/api/v1/spark/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provision_id": "0002_wfbm",
+    "service_id": "test",
+    "category": "test",
+    "region": "ic",
+    "uid": "001"
+  }'
+```
+
+**Response** (500):
+```json
+{
+  "success": false,
+  "message": "서버 설정 로드에 실패했습니다",
+  "error": {
+    "code": "CONFIG_LOAD_FAILED",
+    "message": "설정 파일을 로드할 수 없습니다",
+    "details": "failed to read config.json: no such file or directory",
+    "retryable": true
+  }
+}
+```
+
+## Configuration
+
+### Configuration File (`config/config.json`)
+
 ```json
 {
   "config_specs": [
     {
       "provision_id": "0002_wfbm",
-      "enabled": "true",
       "resource_calculation": {
-        "minio": "1234/5678/<<service_id>>/input/",
-        "threshold": 10000000,
-        "min_queue": "min",
-        "max_queue": "max"
+        "enabled": "true",
+        "minio": "1234/5678/<<service_id>>",
+        "tiers": [
+          {
+            "name": "small",
+            "max_size": 10000000,
+            "queue": "ias.small",
+            "executor": 1,
+            "cpu": 1
+          },
+          {
+            "name": "medium",
+            "min_size": 10000000,
+            "queue": "ias.medium",
+            "executor": 2,
+            "cpu": 2
+          },
+          {
+            "name": "large",
+            "min_size": 53687091200,
+            "queue": "ias.large",
+            "executor": 3,
+            "cpu": 4
+          }
+        ]
       },
-      "gang_scheduling": {
-        "cpu": "5",
-        "memory": "10",
-        "executor": "1"
+      "resource_allocation": {
+        "enabled": true,
+        "name": "ias allocation",
+        "source": {
+          "cpu": 50,
+          "memory": 50,
+          "queue": "root.ias"
+        },
+        "target": {
+          "cpu": 5,
+          "memory": 5,
+          "queue": "temp"
+        },
+        "namespace": "common"
       },
+```
+
+**Note**: Queue names in config should not include the `root.` prefix, as it's automatically added by the service. For example:
+- Use `"queue": "temp"` instead of `"queue": "root.temp"`
+- Use `"queue": "ias"` instead of `"queue": "root.ias"`
       "build_number": {
-        "number": "4.0.1"
+        "major": "4",
+        "minor": "0",
+        "patch": "1"
       }
     }
   ]
 }
 ```
 
-### Configuration Fields
+### Environment Variables
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `provision_id` | string | 고유 프로비저닝 식별자 |
-| `enabled` | string | 활성화/비활성화 ("true"/"false") |
-| `resource_calculation.minio` | string | MinIO 베이스 경로 (bucket/object_prefix) |
-| `resource_calculation.threshold` | integer | 파일 크기 기준값 (bytes) |
-| `resource_calculation.min_queue` | string | 작은 파일용 큐 이름 |
-| `resource_calculation.max_queue` | string | 큰 파일용 큐 이름 |
-| `gang_scheduling.cpu` | string | CPU 코어 수 |
-| `gang_scheduling.memory` | string | 메모리 크기 |
-| `gang_scheduling.executor` | string | Executor 인스턴스 수 |
-| `build_number.number` | string | 빌드 버전 |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PORT` | Server port | `8080` |
+| `MINIO_ROOT_USER` | MinIO access key | - |
+| `MINIO_ROOT_PASSWORD` | MinIO secret key | - |
+| `MINIO_ENDPOINT` | MinIO endpoint | `localhost:9000` |
+| `YUNIKORN_SERVICE_URL` | YuniKorn REST API URL | `http://yunikorn-service:9080` |
+| `KUBECONFIG` | Kubernetes config path | `~/.kube/config` |
 
-## 🔄 Template Processing
+## Resource Allocation Logic
 
-### 3. Template Files
-Templates are stored in `template/` directory: `{provision_id}.yaml`
+### Priority 1: Resource Allocation Thresholds
 
-**Template 목록:**
-```
-template/
-├── 0001_wfbm.yaml
-├── 0002_wfbm.yaml     # enabled: true (리소스 계산 적용)
-└── 0003_wfbm.yaml     # enabled: false (텍플릿 원본 유지)
-```
+When `resource_allocation.enabled` is `true`, the service checks if:
+- Source queue usage >= threshold (e.g., CPU >= 50%, Memory >= 50%)
+- Target namespace usage <= threshold (e.g., CPU <= 5%, Memory <= 5%)
+
+If conditions are met, the application is scheduled in the target namespace/queue.
+
+### Priority 2: Resource Calculation (Tier-based)
+
+If resource allocation conditions are not met, the service falls back to tier-based selection based on MinIO file/folder size:
+
+| Tier | File Size | Queue | Executors | CPU |
+|------|-----------|-------|-----------|-----|
+| small | < 10 MB | ias.small | 1 | 1 |
+| medium | >= 10 MB | ias.medium | 2 | 2 |
+| large | >= 50 GB | ias.large | 3 | 4 |
+
+**CPU Configuration**:
+The `cpu` field in config.json automatically sets 4 executor CPU parameters:
+
+| Field | Calculation | Example (CPU=2) |
+|-------|-------------|-----------------|
+| `spec.executor.cores` | CPU | `2` |
+| `spec.driver.annotations.yunikorn.apache.org/task-groups[1].minResource.cpu` | CPU × 100m | `"200m"` |
+| `spec.executor.template.spec.containers[0].resources.limits.cpu` | CPU | `"2"` |
+| `spec.executor.template.spec.containers[0].resources.requests.cpu` | CPU × 500m | `"1000m"` |
+
+**MinIO Configuration**:
+- Set `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_ENDPOINT` environment variables
+- Configure bucket and path in config.json: `"minio": "bucket/path/<<service_id>>"`
+- File size is automatically retrieved from MinIO object metadata
+- If file doesn't exist, defaults to `ias.small` queue
+
+### Gang Scheduling
+
+All Spark applications use YuniKorn gang scheduling with configurable:
+- CPU per task
+- Memory per task
+- Executor minimum members
+
+## Templates
+
+Spark application templates are stored in `template/` directory with naming convention: `{provision_id}.yaml` (hyphens converted to underscores).
+
+Example: `provision_id: "0002-wfbm"` → `template/0002_wfbm.yaml`
 
 ### Template Placeholders
 
-| Placeholder | 설명 | 출처 | 치환되는 값 |
-|-------------|---------|--------|---------------|
-| `SERVICE_ID_PLACEHOLDER` | 서비스 ID 플레이스홀더 | Request의 `service_id` 파라미터 또는 config.json의 `resource_calculation.minio` 경로의 `<<service_id>>` |
-| `<<service_id>>` | 서비스 ID 플레이스홀더 (MinIO 경로용) | config.json의 `resource_calculation.minio` 값에서 실제 `service_id`로 치환 (`services.BuildMinioPath()`) |
-| `BUILD_NUMBER` | 빌드 번호 플레이스홀더 | config.json의 `build_number.number` 값 (`services.ApplyBuildNumberToYAML()`) |
-| `instances:` | Executor 인스턴스 | config.json의 `gang_scheduling.executor` 값 (`services.UpdateExecutorInstances()`) |
-| `minMember:` | Task group 최소 멤버 | config.json의 `gang_scheduling.executor` 값 (task-groups annotation) |
+Templates support the following placeholders:
+- `SERVICE_ID_PLACEHOLDER`: Replaced with actual service ID
+- `BUILD_NUMBER`: Replaced with semantic version from config.json (e.g., `4.0.1`)
+  - Format: `{major}.{minor}.{patch}` from `build_number` field in config.json
+  - Applied to: image, sparkVersion, and build-number labels
+- `QUEUE_PLACEHOLDER`: Replaced with selected queue path
 
-### Processing Steps
+### Arguments Injection
 
-1. **Read template** based on `provision_id`
-2. **Apply build number** - Replace `BUILD_NUMBER` placeholder
-3. **Calculate queue** - Based on MinIO file size vs threshold
-4. **Apply executor settings** - Update `instances` and `minMember`
-5. **Apply service ID labels** - Replace `SERVICE_ID_PLACEHOLDER` (with category and uid)
-   - Format: `{service_id}-{category}-{uid}` or `{service_id}-{category}`
-6. **Return final YAML**
+When the `arguments` field is provided in the request, the service dynamically adds an `arguments` section under `spec:` in the YAML:
 
-## 🗄️ MinIO Integration
-
-### Resource Calculation
-MinIO의 `StatObject` API를 사용하여 파일 다운로드 없이 메타데이터만 조회:
-
-**Logic:**
-```
-if file_size < threshold:
-    selected_queue = min_queue
-else:
-    selected_queue = max_queue
+**Single argument** (`"arguments": "1000000"`):
+```yaml
+spec:
+  arguments:
+    - "1000000"
+  type: Scala
 ```
 
-### Environment Variables
-- `MINIO_ROOT_USER`: MinIO access key
-- `MINIO_ROOT_PASSWORD`: MinIO secret key
-- `MINIO_ENDPOINT`: MinIO server (default: localhost:9000)
-
-### Retrieved Metadata
-```json
-{
-  "minio_path": "1234/5678/test-00001",
-  "size_bytes": 14081741,
-  "size_formatted": "13.4 MiB",
-  "etag": "4442d5294978a87a54bb74fa8e734a0c",
-  "last_modified": "2026-02-06T00:31:34Z",
-  "content_type": "application/octet-stream"
-}
+**Multiple arguments** (`"arguments": "111 222 333"`):
+```yaml
+spec:
+  arguments:
+    - "111"
+    - "222"
+    - "333"
+  type: Scala
 ```
 
-## 📝 Structured Logging
+**No arguments** (field omitted or empty):
+The `arguments` section is not added to the YAML, preserving the template's default configuration.
 
-The service uses structured logging with 5 distinct log types for each request:
+## Deployment
 
-### 1. Client Input Log
-요청이 보낸 클라이언트 입력 값들을 기록합니다.
+### Prerequisites
 
-```json
-{
-  "log_type": "client_input",
-  "endpoint": "create",
-  "provision_id": "0002_wfbm",
-  "service_id": "test-00020",
-  "category": "fsa",
-  "region": "ic",
-  "uid": "123",
-  "received_at": "2026-02-06T13:50:22+09:00"
-}
-```
-
-### 2. Config Values Log
-config.json에서 로드한 프로비저닝 설정 값을 기록합니다.
-
-```json
-{
-  "log_type": "config_values",
-  "provision_id": "0002_wfbm",
-  "enabled": "true",
-  "resource_calculation": {
-    "minio": "1234/5678/<<service_id>>/input/",
-    "threshold": 10000000,
-    "min_queue": "min",
-    "max_queue": "max"
-  },
-  "gang_scheduling": {
-    "cpu": "5",
-    "memory": "10",
-    "executor": "1"
-  },
-  "build_number": {
-    "number": "4.0.1"
-  }
-}
-```
-
-### 3. MinIO Resource Calculation Log
-MinIO StatObject API로 조회한 파일/폴더 정보를 기록합니다.
-
-```json
-{
-  "log_type": "minio_resource_calculation",
-  "endpoint": "create",
-  "provision_id": "0002_wfbm",
-  "service_id": "test-00020",
-  "minio_path": "1234/5678/test-00020",
-  "file_size": 14081741,
-  "threshold": 10000000,
-  "selected_queue": "max",
-  "calculated_at": "2026-02-06T13:50:22+09:00"
-}
-```
-
-### 4. MinIO Metadata Log
-MinIO 객체의 상세 메타데이터를 기록합니다.
-
-```json
-{
-  "log_type": "minio_metadata",
-  "endpoint": "create",
-  "provision_id": "0002_wfbm",
-  "service_id": "test-00020",
-  "minio_path": "1234/5678/test-00020",
-  "size_bytes": 14081741,
-  "size_formatted": "13.4 MiB",
-  "etag": "4442d5294978a87a54bb74fa8e734a0c",
-  "last_modified": "2026-02-06T00:31:34Z",
-  "content_type": "application/octet-stream",
-  "storage_class": "",
-  "user_metadata": {},
-  "fetched_at": "2026-02-06T13:50:22+09:00"
-}
-```
-
-### 5. Final YAML Result Log
-최종적으로 생성된 전체 SparkApplication YAML을 기록합니다.
-
-```json
-{
-  "log_type": "final_yaml_result",
-  "content": "apiVersion: sparkoperator.k8s.io/v1beta2\nkind: SparkApplication\n..."
-}
-```
-
-## 📊 Project Structure
-
-```
-/root/hynix/
-├── main.go                      # Application entry point
-├── config/
-│   └── config.json              # Provision configurations
-├── template/
-│   ├── 0001_wfbm.yaml           # Template for 0001_wfbm
-│   ├── 0002_wfbm.yaml           # Template for 0002_wfbm (enabled)
-│   └── 0003_wfbm.yaml           # Template for 0003_wfbm
-├── handlers/
-│   ├── create.go                # /create endpoint handler
-│   └── reference.go             # /reference endpoint handler
-├── services/
-│   ├── config.go                # Configuration management
-│   └── template.go              # Template processing
-├── logger/
-│   └── logger.go                # Structured logging
-├── metrics/
-│   └── metrics.go               # Prometheus metrics
-├── cmd/
-│   └── proxy/
-│       └── main.go            # Proxy server
-├── docs/
-│   ├── yunikorn-ui.html         # Yunikorn dashboard
-│   ├── spark-metrics-ui.html     # Spark metrics dashboard
-│   └── opensearch-discovery-ui.html # OpenSearch dashboard
-└── README.md                    # This file
-```
-
-## 🚀 Quick Start
+- Kubernetes cluster with Spark Operator installed
+- YuniKorn scheduler configured
+- MinIO instance for object storage
+- Network policies allowing access to Kubernetes API
 
 ### Build
-```bash
-cd /root/hynix
-go build -o main .
-```
-
-### Set Environment Variables
-```bash
-export MINIO_ROOT_USER="your-access-key"
-export MINIO_ROOT_PASSWORD="your-secret-key"
-export PORT=8080
-```
-
-### Start API Server
-```bash
-./main
-```
-
-**Output:**
-```
-2026/02/12 11:13:35 Starting Hynix microservice
-2026/02/12 11:13:35 Server listening addr: :8080
-```
-
-## 🔄 Code Flow
-
-### Create Endpoint 처리 흐름
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                   POST /api/v1/spark/create                 │
-│                                                               │
-└─────────────────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-                    ┌─────────────────────────────────────────────────────────┐
-                    │
-                    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                                                               │
-│  CreateSparkApplication()                                            │
-│  ┌────────────────────────────────────────────────────────────────────┤│
-│  │                                                               │
-│  │ validateCreateRequest()    ┌───────────────────┐       │
-│  └── parseCreateRequest()    │                 │       │
-│     └── loadProvisionConfig()    │               │       │
-│           └── services.LoadConfig()   │               │       │
-│                                      └── services.FindProvisionConfig()       │
-│                                               │
-│  ┌─────────────────────────────────────────────────────────┤       │
-│ │ handleCreateRequest()                                  │
-│ │ ├─────────────────────────────────────────────────────────────┤│
-│ │ │                                                 │             │
-│ │ └─ enabled? ─── NO ──┐    YES ──┐       │
-│ │                              │          │         │         │
-│ │   │   handleDisabledProvision()     │   handleEnabledProvision()  │
-│ │   │                            │         │         │
-│ │   │   │   │   services.LoadTemplateRaw()  │         │
-│ │   │                            │   │         │   services.ApplyBuildNumberToYAML()  │
-│ │   │                            │   │         │   services.ApplyServiceIDLabelsWithUIDToYAML()  │
-│ │   │                            │   │         │   ┌─────────────────────────────────┐    │
-│ │   │                            │   │         │   │ │   CalculateQueueWithMetadata()   │    │
-│ │   │                            │   │         │   └── folder? ── count>0 ──┐ │
-│ │   │                            │   │         │       │       │       services.ApplySparkFileCountToYAML()│
-│ │   │                            │   │         │       │       │   └────────────────────────────────────┘│
-│ │   │                            │   │         │       │
-│ │   │                            │   │         │       │   services.UpdateExecutorInstances()│
-│ │   │                            │   │         │       │   services.UpdateExecutorMinMember()│
-│ │   │                            │   │         │       │   services.CreateSparkApplicationCRFromYAML()│
-│ │   │                            │   │         │       │   ┌─────────────────────────────────────┐│
-│ │   │                            │   │         │       │   │   c.JSON(201, result)              │
-│ │   │                            │   │         │       │   └────────────────────────────────────┘│
-│ └────────────────────────────────────────────────────────────────┘│
-│                                                               │
-│                                                               ▼
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Reference Endpoint 처리 흐름
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                   GET /api/v1/spark/reference?provision_id=...&service_id=...&category=...&uid=...   │
-│                                                               │
-└─────────────────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-                    ┌─────────────────────────────────────────────────────────────────┐
-                    │
-                    ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                                                               │
-│  GetSparkReference()                                           │
-│  ┌─────────────────────────────────────────────────────────────────────┤│
-│ │                                                               │
-│ │ validateReferenceRequest()                                  │
-│ └── parseReferenceRequest()                                   │
-│     └── loadProvisionConfig()                            │
-│           └── services.LoadConfig()                      │
-│                                      └── services.FindProvisionConfig()      │
-│                                               │
-│  ┌─────────────────────────────────────────────────────────┤       │
-│ │ handleReferenceRequest()                                  │
-│ │ ├─────────────────────────────────────────────────────────────┤│
-│ │ └─ enabled? ─── NO ──┐    YES ──┐       │
-│ │                              │          │         │
-│ │   │   handleReferenceDisabled()      │   handleReferenceEnabled()  │
-│ │   │                            │         │         │
-│ │   │                            │   │   services.LoadTemplateRaw()  │         │
-│ │   │                            │   │         │   services.ApplyBuildNumberToYAML()  │
-│ │   │                            │   │         │   services.ApplyServiceIDLabelsWithUIDToYAML()  │
-│ │   │                            │   │         │   └─────────────────────────────────────┐│
-│ │   │                            │   │         │   │   CalculateQueueWithMetadata()   │    │
-│ │   │                            │   │         │   └── folder? ── count>0 ──┐ │
-│ │   │                            │   │         │       │       │       services.ApplySparkFileCountToYAML()│
-│ │   │                            │   │         │       │       │   └────────────────────────────────────┘│
-│ │   │                            │   │         │       │   sendYAMLResponse(c, yamlOutput) │
-│ └────────────────────────────────────────────────────────────────────────────┘│
-│                                                               │
-│                                                               ▼
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-## 🔧 Troubleshooting
-
-### 템플릿 파일 없음
-**증상:**
-```
-Failed to load template: no such file
-```
-
-**해결 방법:**
-```bash
-# 1. provision_id 확인
-echo "provision_id: 0002_wfbm"
-
-# 2. 템플릿 파일 존재 여부 확인
-ls -la template/ | grep "0002_wfbm.yaml"
-
-# 3. config.json 설정 확인
-cat config/config.json | grep -A 5 "0002_wfbm"
-```
-
-### 포트 충돌 (Port Already in Use)
-**증상:**
-```
-listen tcp :8080: bind: address already in use
-listen tcp :8082: bind: address already in use
-```
-
-**확인:**
-```bash
-# 포트 사용 중인 프로세스 확인
-lsof -i :8080 -i :8082
-
-# 특정 포트를 사용하는 프로세스 찾기
-ps aux | grep -E "(main|proxy|hynix)" | grep -v ":8080|:8082"
-
-# 필요없는 프로세스 종료
-kill -9 <PID>
-```
-
-**해결 방법:**
-```bash
-# 1. 모든 관련 프로세스 종료
-pkill -f "main|proxy" 2>/dev/null
-
-# 2. 재시작
-cd /root/hynix && ./main
-
-# 또는 백그라운드로 실행
-nohup ./main
-```
-
-### API 요청 실패 (404/500)
-**증상:**
-```
-{"error": "Unsupported Kubernetes API path"}
-{"error": "YAML 파싱 실패: error converting YAML to JSON"}
-```
-
-**원인 분석:**
-
-| 에러 타입 | 원인 | 해결 방법 |
-|-----------|------|----------|
-| **404 Not Found** | 경로가 잘못됨 | 1. URL 경로 확인 (/api/v1/spark/create) | 2. 메서드 확인 (POST vs GET) | 3. config.json에 provision_id 존재 확인 | 4. 템플릿 파일 존재 확인 |
-| **500 Server Error** | 서버 내부 오류 | 로그 파일 확인 (/tmp/hynix-api.log) | 1. MinIO 연결 확인 (MINIO_ROOT_USER, MINIO_ROOT_PASSWORD 설정) | 2. Kubernetes 연결 확인 (kubectl cluster-info) |
-
-### MinIO 연결 실패
-**증상:**
-```
-Failed to reach MinIO: dial tcp 127.0.0.1:9000: connect: connection refused
-MinIO 파일 크기 확인 실패: MinIO 환경 변수 설정 안됨 (MINIO_ROOT_USER, MINIO_ROOT_PASSWORD) (기본값: min 사용)
-```
-
-**해결 방법:**
-```bash
-# 1. MinIO 서비스 동작 확인
-docker ps | grep minio
-kubectl get pods -n minio
-
-# 2. 환경 변수 설정
-export MINIO_ROOT_USER="your-access-key"
-export MINIO_ROOT_PASSWORD="your-secret-key"
-
-# 3. 재시도
-curl http://localhost:8080/api/v1/spark/reference?provision_id=0002_wfbm&service_id=test-00020&category=fsa&uid=123"
-```
-
-### YAML 파싱 실패
-**증상:**
-```
-error converting YAML to JSON: yaml: line 5: mapping values are not allowed in this context
-```
-
-**원인:**
-- 템플릿 파일 구문 오류 (indent, 탭/스페이스 혼합)
-
-**해결 방법:**
-```bash
-# 1. 템플릿 파일 구문 검사
-yamllint template/0002_wfbm.yaml
-
-# 2. YAML 내용 확인
-cat template/0002_wfbm.yaml | less
-```
-
-## 📊 Metrics
-
-Prometheus metrics are exposed at `/metrics`:
-
-- `hynix_requests_total`: Total request count
-- `hynix_request_duration_seconds`: Request latency
-- `hynix_provision_mode`: Provision mode (enabled/disabled)
-- `hynix_queue_selection`: Queue selection count
-
-## 🔍 Health Check
 
 ```bash
-curl http://localhost:8080/health
+go build -o hynix main.go
 ```
 
-**Response:**
-```json
-{
-  "status": "healthy",
-  "version": "2.0"
-}
-```
+### Run
 
-## 🌐 Proxy Server & Dashboards
-
-### Proxy Server 개요 (`cmd/proxy/main.go`)
-
-웹 대시 서버로서 UI와 API 프록시, OpenSearch 자동 발견 기능 제공.
-
-**포트:** 8082
-
-**주요 기능:**
-1. **정적 파일 제공**
-   - `/yunikorn-ui.html` - Yunikorn 스케줄러 대시보드
-   - `/spark-metrics-ui.html` - Spark 메트릭 대시보드
-   - `/opensearch-discovery-ui.html` - OpenSearch 로그 분석 대시보드
-
-2. **API 프록시**
-   - `/api/ws/*` → Yunikorn REST API (:9080)
-   - `/api/opensearch/*` → OpenSearch API (:9200, port-forward 자동)
-   - `/api/api/v1/*` → Kubernetes API (kubectl 통해)
-
-3. **자동 기능**
-   - OpenSearch 서비스 자동 발견 및 port-forward 관리
-   - CORS 지원 (모든 endpoint)
-   - Kubernetes API 프록시 (pod 메트릭)
-
-### 아키텍처
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    Web Browser                                │
-│  ┌───────────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │   Yunikorn UI     │  │Spark Metrics │  │ OpenSearch UI   │  │
-│  │ /yunikorn-ui.html │  │ /spark-      │  │ /opensearch-    │  │
-│  │                   │  │ metrics-ui   │  │ discovery-ui    │  │
-│  └───────────────────┘  └──────────────┘  └──────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                   Proxy Server (:8082)                     │
-│  - Serves static HTML files                                │
-│  - Proxies Kubernetes API requests (via kubectl)            │
-│  - Proxies Yunikorn API requests                          │
-│  - Proxies Spark metrics (via kubectl)                     │
-│  - Proxies OpenSearch API (auto port-forward)               │
-└─────────────────────────────────────────────────────────────────────────┘
-          │                │               │               │
-          ▼                ▼               ▼               ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ Kubernetes   │  │ Yunikorn     │  │ Spark Pods   │  │ OpenSearch   │
-│ API (kubectl)│  │ API :9080   │  │(metrics)    │  │ :9200 (pf) │
-└──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
-```
-
-### 접속 방법
-
-**Yunikorn UI:**
 ```bash
-curl http://localhost:8082/yunikorn-ui.html
+# Using default port (8080)
+./hynix
+
+# Using custom port
+PORT=9090 ./hynix
+
+# With MinIO configuration
+MINIO_ROOT_USER=minioadmin \
+MINIO_ROOT_PASSWORD=minioadmin \
+MINIO_ENDPOINT=minio:9000 \
+./hynix
 ```
 
-**Spark Metrics UI:**
+### Namespace Setup
+
+#### Create common Namespace
+
 ```bash
-curl http://localhost:8082/spark-metrics-ui.html
+kubectl create namespace common
 ```
 
-**API 프록시 (Yunikorn):**
+#### Configure RBAC for common Namespace
+
 ```bash
-# Active applications 조회
-curl http://localhost:8082/api/ws/v1/partition/default/applications/active
+# Apply ServiceAccount
+kubectl apply -f deploy/spark-operator-spark-common.yaml
 
-# Queue 정보 조회
-curl http://localhost:8082/api/ws/v1/partition/default/queue/root.max
+# Apply RBAC
+kubectl apply -f deploy/spark-operator-rbac-common.yaml
 ```
 
-**Kubernetes API 프록시 (Pod 메트릭):**
+#### Configure YuniKorn Queues
+
 ```bash
-# Pod 목록 조회 (label selector 지원)
-curl "http://localhost:8082/api/api/v1/namespaces/default/pods?labelSelector=spark-app%3Dtest-00020"
+# Apply YuniKorn queue configuration
+kubectl apply -f deploy/yunikorn-queues-config.yaml
 
-# 특정 Pod 메트릭 조회
-curl "http://localhost:8082/api/api/v1/namespaces/default/pods/test-00020-fsa-123/proxy/metrics/driver/prometheus/"
-curl "http://localhost:8082/api/api/v1/namespaces/default/pods/test-00020-fsa-123/proxy/metrics/executors/prometheus/"
+# Restart YuniKorn to load new configuration
+kubectl rollout restart deployment yunikorn-scheduler -n default
 ```
 
-**OpenSearch API 프록시:**
+**Note**: The YuniKorn configuration includes:
+- `root.temp` queue for common namespace
+- `root.ias` queue with small/medium/large sub-queues
+- Placement rules to automatically assign applications to correct queues
+
+### Docker
+
+```dockerfile
+FROM golang:1.23-alpine AS builder
+WORKDIR /app
+COPY . .
+RUN go build -o hynix main.go
+
+FROM alpine:latest
+COPY --from=builder /app/hynix /hynix
+COPY config/ /app/config/
+COPY template/ /app/template/
+EXPOSE 8080
+CMD ["/hynix"]
+```
+
+## Monitoring
+
+### Prometheus Metrics
+
+The service exposes the following metrics:
+
+- `hynix_requests_total`: Total request count (by provision_id, endpoint, status)
+- `hynix_request_duration_seconds`: Request duration
+- `hynix_k8s_creation_total`: Kubernetes CR creation count
+- `hynix_provision_mode_total`: Provision mode usage
+- `hynix_queue_selection_total`: Queue selection count
+- `hynix_resource_allocation_decision_total`: Resource allocation decisions
+- `hynix_resource_calculation_skipped_total`: Skipped calculations
+- `hynix_executor_min_member`: Executor minimum member count
+- `hynix_gang_scheduling_resources`: Gang scheduling resources
+
+### Logging
+
+Structured logging with Zap includes:
+- Client input parameters
+- Configuration values
+- MinIO metadata
+- Resource calculation results
+- Final YAML manifests
+- Kubernetes API responses
+
+## Spark Application Templates
+
+Templates are stored in `template/` directory and follow the SparkOperator CRD format:
+
+- **0001_wfbm.yaml**: Basic WFBM provision
+- **0002_wfbm.yaml**: WFBM with resource calculation
+- **0003_wfbm.yaml**: Long-running WFBM jobs
+- **0004_wfbm.yaml**: Extended WFBM configuration
+
+Each template includes:
+- YuniKorn gang scheduling annotations
+- Prometheus metrics configuration
+- Security hardening (seccomp, non-root)
+- Resource limits and requests
+
+## Development
+
+### Project Structure
+
+- **Go 1.23+**
+- **Gin** - Web framework
+- **client-go** - Kubernetes API client
+- **minio-go** - MinIO client
+- **Zap** - Structured logging
+
+### Testing
+
 ```bash
-# 전체 로그 검색
-curl -X POST http://localhost:8082/api/opensearch/ss4o_logs-*/_search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "service_id:test-00020"}'
+# Run tests
+go test ./...
 
-# 시간대별 검색
-curl -X POST http://localhost:8082/api/opensearch/ss4o_logs-*/_search \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "service_id:test-00020",
-    "timeRange": "1h"
-  }'
+# Run with coverage
+go test -cover ./...
 ```
 
-### Yunikorn Scheduler UI
+## Troubleshooting
 
-**주요 기능:**
-- **활성화된 애플리케이션 목록** - 제출된 Spark 애플리케이션 표시
-- **큐 할당 현황** - root.default 큐의 리소스 사용량 확인
-- **파티션별 리소스** - 각 파티션의 vcore, memory 사용량 모니터링
+### Common Issues
 
-**화면 구성:**
-- 상단: 애플리케이션 목록 (자동 갱신 5초)
-- 중단: 파티션별 상태 및 리소스
-- 하단: 큐 정보 및 파티션 탐색
+1. **MinIO Connection Failed**
+   - Verify `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` are set
+   - Check `MINIO_ENDPOINT` accessibility
 
-### Spark Metrics UI
+2. **YuniKorn API Error**
+   - Verify `YUNIKORN_SERVICE_URL` is correct
+   - For local testing: `export YUNIKORN_SERVICE_URL=http://localhost:9080`
+   - Ensure port-forward is running: `kubectl port-forward svc/yunikorn-service 9080:9080`
 
-**주요 기능:**
-- **Driver 메트릭** - JVM Memory, GC, CPU, Memory, Shuffle
-- **Executor 메트릭** - Per-executor 리소스 사용량 (Active Tasks, Memory, Shuffle)
-- **실시간 그래프** - Prometheus endpoint에서 직접 수집
+3. **Template Not Found**
+   - Ensure template file exists: `template/{provision_id}.yaml`
+   - Check filename uses underscores instead of hyphens
 
-**사용 방법:**
-1. 애플리케이션 이름 클릭
-2. "Load Metrics" 버튼 클릭
-3. 드라이버/executor 선택
-4. 시간대별 필터링 (1분/5분/15분)
+4. **Kubernetes API Error**
+   - Verify RBAC permissions for SparkApplication CRD
+   - Check service account has appropriate roles
 
-### OpenSearch Discovery UI
+## License
 
-**주요 기능:**
-- **전체 텍스트 검색** - 로그 본문에서 키워드 검색
-- **시간대별 필터링** - Last 1 hour, 7 days, 30 days, Custom
-- **포드 식별** - 각 로그 엔트리에 pod 이름, namespace 표시
-- **최대 10,000건** - 한 번에 최대 1만건 표시
-- **타임스탬프 정렬** - 최신 로그 먼저 표시
+SK hynix
 
-**사용 방법:**
-1. 검색어 입력 후 엔터
-2. Service ID 필터링
-3. 시간 범위 선택
-4. 로그 엔트리 클릭하여 상세 보기
+## Contributing
 
-## 📌 Service Ports
-
-| Service | Port | Purpose | Access URL |
-|---------|-------|----------|------------|
-| **API Server** | 8080 | Spark create/reference endpoints | http://localhost:8080 |
-| **Proxy Server** | 8082 | UI + API proxy (Yunikorn/OpenSearch/K8s) | http://localhost:8082 |
-| **Yunikorn API** | 9080 | Yunikorn REST API (via proxy) | http://localhost:9080 |
-| **OpenSearch** | 9200 | Port-forward (auto) | localhost:9200 |
-
-## 🔄 Version History
-
-### 2.0 (2026-02-12)
-- ✅ MinIO 통합으로 리소스 계산 개선
-- ✅ 5가지 구조화된 JSON 로그 추가
-- ✅ BUILD_NUMBER 템플릿 처리
-- ✅ **서비스 ID 라벨에 category 포함**: category 파라미터를 사용하여 `{service_id}-{category}-{uid}` 형식 지원
-- ✅ **폴더 시 spark.file.count 추가**: 오브젝트 수를 YAML에 추가
-- ✅ log 필드명 변경: `yaml_content` → `content`
-- ✅ Proxy Server 포트 변경: 8080 → 8082 (충돌 방지)
-
----
-
-**Version**: 2.0
-**Last Updated**: 2026-02-12
-**Maintained By**: Data Engineering Team
+This is an internal SK hynix project. Please contact the maintainers for contribution guidelines.

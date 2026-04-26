@@ -1,0 +1,60 @@
+# ServiceAccount for Spark applications in common namespace
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spark-operator-spark
+  namespace: common
+  labels:
+    app.kubernetes.io/name: spark-operator
+    app.kubernetes.io/version: "2.4.0"
+
+---
+# Role for Spark applications in common namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spark
+  namespace: common
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - '*'
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - '*'
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - '*'
+
+---
+# RoleBinding for Spark applications in common namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark
+  namespace: common
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: spark
+subjects:
+- kind: ServiceAccount
+  name: spark-operator-spark
+  namespace: common
